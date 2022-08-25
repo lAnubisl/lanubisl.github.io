@@ -1,0 +1,190 @@
+<!doctype html><html xmlns=http://www.w3.org/1999/xhtml xml:lang=en-us lang=en-us><head><link href=https://gmpg.org/xfn/11 rel=profile><meta charset=utf-8><meta name=generator content="Hugo 0.101.0"><meta name=viewport content="width=device-width,initial-scale=1"><title>Dapper queries synchronized with MSSQL database schema &#183; by Alex Code blog</title><meta name=description content><link type=text/css rel=stylesheet href=https://byalexblog.net/css/print.css media=print><link type=text/css rel=stylesheet href=https://byalexblog.net/css/poole.css><link type=text/css rel=stylesheet href=https://byalexblog.net/css/syntax.css><link type=text/css rel=stylesheet href=https://byalexblog.net/css/hyde.css><link rel=stylesheet href="https://fonts.googleapis.com/css?family=Abril+Fatface|PT+Sans:400,400i,700"><link rel=apple-touch-icon-precomposed sizes=144x144 href=/apple-touch-icon-144-precomposed.png><link rel="shortcut icon" href=/favicon.png></head><body><aside class=sidebar><div class=container><div class=sidebar-about><a href=https://byalexblog.net/><h1>by Alex Code blog</h1></a><p class=lead>Smart thoughts... and not very smart too!</p></div><nav><ul class=sidebar-nav><li><a href=https://byalexblog.net/>Home</a></li><li><a href=https://byalexblog.net/article>Articles</a></li><li><a href=https://github.com/lanubisl target=_blank>Github</a></li><li><a href=https://www.linkedin.com/in/panfilenok target=_blank>LinkedIn</a></li></ul></nav><p>&copy; 2022. All rights reserved.</p></div></aside><main class="content container"><div class=post><h1>Dapper queries synchronized with MSSQL database schema</h1><time datetime=2022-08-25T12:43:45+0200 class=post-date>Thu, Aug 25, 2022</time><p><a href=https://github.com/DapperLib/Dapper>Dapper</a> is a Micro ORM that allows you to control SQL queries you are executing and removes the pain of mapping the dataset results back to your domain model. The thing is that when you specify SQL queries you have to make sure they are valid against the current Database schema. One solution is to use <a href="https://docs.microsoft.com/en-us/sql/relational-databases/stored-procedures/create-a-stored-procedure?view=sql-server-ver16">Stored Procedures</a>&mldr; other one is this:</p><h3 id=database-project>Database project</h3><p><a href="https://docs.microsoft.com/en-us/previous-versions/sql/sql-server-data-tools/hh272702(v=vs.103)?redirectedfrom=MSDN">Database project</a> is a special type of projects in Visual Studio which allows you to have MSSQL database schema in a source control.
+<img src=https://visualstudio.microsoft.com/wp-content/uploads/2021/10/Swimlane1.png alt=11>
+It allows you to build the schema, compare it with the target database, generate change scripts and publish to the environment. It is possible to use the database project programmatically to build the C# definition of the database schema. In order to achieve this, we are going to use <a href="https://docs.microsoft.com/en-us/visualstudio/modeling/code-generation-and-t4-text-templates?view=vs-2022">T4 Text Templates</a>. Here is the exact template you can use:</p><h4 id=templatett><strong><code>Template.tt</code></strong></h4><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-c# data-lang=c#><span style=display:flex><span>&lt;<span style=color:#960050;background-color:#1e0010>#@</span> template debug=<span style=color:#e6db74>&#34;false&#34;</span> hostspecific=<span style=color:#e6db74>&#34;false&#34;</span> language=<span style=color:#e6db74>&#34;C#&#34;</span> <span style=color:#960050;background-color:#1e0010>#</span>&gt;
+</span></span><span style=display:flex><span>&lt;<span style=color:#960050;background-color:#1e0010>#@</span> output extension=<span style=color:#e6db74>&#34;.cs&#34;</span> <span style=color:#960050;background-color:#1e0010>#</span>&gt;
+</span></span><span style=display:flex><span>&lt;<span style=color:#960050;background-color:#1e0010>#@</span> SqlModelDirective processor=<span style=color:#e6db74>&#34;SqlModelDirectiveProcessor&#34;</span> <span style=color:#960050;background-color:#1e0010>#</span>&gt;
+</span></span><span style=display:flex><span>&lt;<span style=color:#960050;background-color:#1e0010>#@</span> import namespace=<span style=color:#e6db74>&#34;System.Text&#34;</span> <span style=color:#960050;background-color:#1e0010>#</span>&gt;
+</span></span><span style=display:flex><span>&lt;<span style=color:#960050;background-color:#1e0010>#@</span> import namespace=<span style=color:#e6db74>&#34;Microsoft.SqlServer.Dac&#34;</span> <span style=color:#960050;background-color:#1e0010>#</span>&gt;
+</span></span><span style=display:flex><span>&lt;<span style=color:#960050;background-color:#1e0010>#@</span> import namespace=<span style=color:#e6db74>&#34;System.Collections.Generic&#34;</span> <span style=color:#960050;background-color:#1e0010>#</span>&gt;
+</span></span><span style=display:flex><span>&lt;<span style=color:#960050;background-color:#1e0010>#@</span> import namespace=<span style=color:#e6db74>&#34;Microsoft.SqlServer.Dac.Model&#34;</span> <span style=color:#960050;background-color:#1e0010>#</span>&gt;
+</span></span><span style=display:flex><span>&lt;<span style=color:#960050;background-color:#1e0010>#</span> List&lt;TSqlObject&gt; allTables = GetAllTablesWithViews();
+</span></span><span style=display:flex><span>    WriteLine(<span style=color:#e6db74>@&#34;#pragma warning disable SA1402 // File may only contain a single type&#34;</span>);
+</span></span><span style=display:flex><span>    WriteLine(<span style=color:#e6db74>@&#34;#pragma warning disable SA1629 // Documentation text should end with a period&#34;</span>);
+</span></span><span style=display:flex><span>    WriteLine(<span style=color:#e6db74>@&#34;#pragma warning disable SA1649 // File name should match first type name&#34;</span>);
+</span></span><span style=display:flex><span>    WriteLine(<span style=color:#e6db74>@&#34;namespace MyLibrary.Bll&#34;</span>);
+</span></span><span style=display:flex><span>    WriteLine(<span style=color:#e6db74>@&#34;{&#34;</span>);
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>foreach</span> (<span style=color:#66d9ef>var</span> table <span style=color:#66d9ef>in</span> allTables)
+</span></span><span style=display:flex><span>    {
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>var</span> tableName = table.Name.Parts[<span style=color:#ae81ff>1</span>];
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>var</span> isTable = table.ObjectType.Name == <span style=color:#e6db74>&#34;Table&#34;</span>;
+</span></span><span style=display:flex><span>        WriteLine(<span style=color:#e6db74>&#34;&#34;</span>);
+</span></span><span style=display:flex><span>        WriteLine(<span style=color:#e6db74>$&#34;    /// &lt;summary&gt;&#34;</span>);
+</span></span><span style=display:flex><span>        WriteLine(<span style=color:#e6db74>$&#34;    /// {table.Name}&#34;</span>);
+</span></span><span style=display:flex><span>        WriteLine(<span style=color:#e6db74>$&#34;    /// &lt;/summary&gt;&#34;</span>);
+</span></span><span style=display:flex><span>        WriteLine(<span style=color:#e6db74>$&#34;    internal static class {tableName}&#34;</span>);
+</span></span><span style=display:flex><span>        WriteLine(<span style=color:#e6db74>$&#34;    {{&#34;</span>);
+</span></span><span style=display:flex><span>        WriteLine(<span style=color:#e6db74>$&#34;        /// &lt;summary&gt;&#34;</span>);
+</span></span><span style=display:flex><span>        WriteLine(<span style=color:#e6db74>$&#34;        /// {table.Name}&#34;</span>);
+</span></span><span style=display:flex><span>        WriteLine(<span style=color:#e6db74>$&#34;        /// &lt;/summary&gt;&#34;</span>);
+</span></span><span style=display:flex><span>        WriteLine(<span style=color:#e6db74>$&#34;        internal static readonly string Table = \&#34;</span>[{tableName}]<span style=color:#960050;background-color:#1e0010>\</span><span style=color:#e6db74>&#34;;&#34;</span>);	
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>var</span> columns = table.GetReferenced(isTable ? Table.Columns : View.Columns); 
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>foreach</span>(<span style=color:#66d9ef>var</span> column <span style=color:#66d9ef>in</span> columns)
+</span></span><span style=display:flex><span>        {
+</span></span><span style=display:flex><span>            WriteLine(<span style=color:#e6db74>&#34;&#34;</span>);
+</span></span><span style=display:flex><span>            WriteLine(<span style=color:#e6db74>$&#34;        /// &lt;summary&gt;&#34;</span>);
+</span></span><span style=display:flex><span>            WriteLine(<span style=color:#e6db74>$&#34;        /// {column.Name}&#34;</span>);
+</span></span><span style=display:flex><span>            WriteLine(<span style=color:#e6db74>$&#34;        /// &lt;/summary&gt;&#34;</span>);
+</span></span><span style=display:flex><span>            WriteLine(<span style=color:#e6db74>$&#34;        internal static readonly string {column.Name.Parts[2]} = \&#34;</span>[{column.Name.Parts[<span style=color:#ae81ff>2</span>]}]<span style=color:#960050;background-color:#1e0010>\</span><span style=color:#e6db74>&#34;;&#34;</span>);
+</span></span><span style=display:flex><span>        }
+</span></span><span style=display:flex><span>        WriteLine(<span style=color:#960050;background-color:#1e0010>@</span><span style=color:#e6db74>$&#34;    }}&#34;</span>);
+</span></span><span style=display:flex><span>    }
+</span></span><span style=display:flex><span>    WriteLine(<span style=color:#e6db74>@&#34;}&#34;</span>);
+</span></span><span style=display:flex><span>    WriteLine(<span style=color:#e6db74>@&#34;#pragma warning restore SA1649 // File name should match first type name&#34;</span>);
+</span></span><span style=display:flex><span>    WriteLine(<span style=color:#e6db74>@&#34;#pragma warning restore SA1402 // File may only contain a single type&#34;</span>);
+</span></span><span style=display:flex><span>    WriteLine(<span style=color:#e6db74>@&#34;#pragma warning restore SA1629 // Documentation text should end with a period&#34;</span>);
+</span></span><span style=display:flex><span><span style=color:#960050;background-color:#1e0010>#</span>&gt;
+</span></span><span style=display:flex><span>&lt;<span style=color:#960050;background-color:#1e0010>#</span>+
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>public</span> List&lt;TSqlObject&gt; GetAllTablesWithViews()
+</span></span><span style=display:flex><span>    {
+</span></span><span style=display:flex><span>        List&lt;TSqlObject&gt; allObjects = <span style=color:#66d9ef>new</span> List&lt;TSqlObject&gt;();
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>var</span> model = Model;
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> (model != <span style=color:#66d9ef>null</span>)
+</span></span><span style=display:flex><span>        {
+</span></span><span style=display:flex><span>            <span style=color:#66d9ef>var</span> tables = model.GetObjects(DacQueryScopes.All, ModelSchema.Table);
+</span></span><span style=display:flex><span>            <span style=color:#66d9ef>var</span> views = model.GetObjects(DacQueryScopes.All, ModelSchema.View);
+</span></span><span style=display:flex><span>            <span style=color:#66d9ef>if</span> (tables != <span style=color:#66d9ef>null</span>)
+</span></span><span style=display:flex><span>            {
+</span></span><span style=display:flex><span>                allObjects.AddRange(tables);
+</span></span><span style=display:flex><span>            }
+</span></span><span style=display:flex><span>            <span style=color:#66d9ef>if</span> (views != <span style=color:#66d9ef>null</span>)
+</span></span><span style=display:flex><span>            {
+</span></span><span style=display:flex><span>                allObjects.AddRange(views);
+</span></span><span style=display:flex><span>            }
+</span></span><span style=display:flex><span>        }
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>return</span> allObjects;
+</span></span><span style=display:flex><span>    }
+</span></span><span style=display:flex><span><span style=color:#960050;background-color:#1e0010>#</span>&gt;
+</span></span></code></pre></div><p>This template reads all tables and views from the database project and generates C# class with the definition of each table and view as static read-only strings.</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-c# data-lang=c#><span style=display:flex><span><span style=color:#66d9ef>namespace</span> MyLibrary.Bll
+</span></span><span style=display:flex><span>{
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#75715e>/// &lt;summary&gt;</span>
+</span></span><span style=display:flex><span>    <span style=color:#75715e>/// [dbo].[TblPerson]</span>
+</span></span><span style=display:flex><span>    <span style=color:#75715e>/// &lt;/summary&gt;</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>internal</span> <span style=color:#66d9ef>static</span> <span style=color:#66d9ef>class</span> <span style=color:#a6e22e>TblPerson</span>
+</span></span><span style=display:flex><span>    {
+</span></span><span style=display:flex><span>        <span style=color:#75715e>/// &lt;summary&gt;</span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>/// [dbo].[TblPerson]</span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>/// &lt;/summary&gt;</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>internal</span> <span style=color:#66d9ef>static</span> <span style=color:#66d9ef>readonly</span> <span style=color:#66d9ef>string</span> Table = <span style=color:#e6db74>&#34;[TblPerson]&#34;</span>;
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>/// &lt;summary&gt;</span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>/// [dbo].[TblPerson].[UserId]</span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>/// &lt;/summary&gt;</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>internal</span> <span style=color:#66d9ef>static</span> <span style=color:#66d9ef>readonly</span> <span style=color:#66d9ef>string</span> UserId = <span style=color:#e6db74>&#34;[UserId]&#34;</span>;
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>/// &lt;summary&gt;</span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>/// [dbo].[TblPerson].[FirstName]</span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>/// &lt;/summary&gt;</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>internal</span> <span style=color:#66d9ef>static</span> <span style=color:#66d9ef>readonly</span> <span style=color:#66d9ef>string</span> FirstName = <span style=color:#e6db74>&#34;[FirstName]&#34;</span>;
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>/// &lt;summary&gt;</span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>/// [dbo].[TblPerson].[LastName]</span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>/// &lt;/summary&gt;</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>internal</span> <span style=color:#66d9ef>static</span> <span style=color:#66d9ef>readonly</span> <span style=color:#66d9ef>string</span> LastName = <span style=color:#e6db74>&#34;[LastName]&#34;</span>;
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>/// &lt;summary&gt;</span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>/// [dbo].[TblPerson].[VNumber]</span>
+</span></span><span style=display:flex><span>        <span style=color:#75715e>/// &lt;/summary&gt;</span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>internal</span> <span style=color:#66d9ef>static</span> <span style=color:#66d9ef>readonly</span> <span style=color:#66d9ef>string</span> VNumber = <span style=color:#e6db74>&#34;[VNumber]&#34;</span>;
+</span></span><span style=display:flex><span>    }
+</span></span><span style=display:flex><span>}
+</span></span></code></pre></div><p>The next part of the trick is to link the generated &lsquo;Template.cs&rsquo; file to the project library that uses Dapper. In order to do this, add &lsquo;Template.cs&rsquo; as linked file (Add -> Existing Item -> Add as Link).</p><p>Now you have &lsquo;Template.cs&rsquo; file that reflects all database schema tables and views. Just don&rsquo;t forget to re-generate it from the template every time you modify the database schema.</p><p>Using this file, you now are able to use it as part of your SQL queries. For example:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-c# data-lang=c#><span style=display:flex><span><span style=color:#66d9ef>internal</span> <span style=color:#66d9ef>static</span> <span style=color:#66d9ef>partial</span> <span style=color:#66d9ef>class</span> <span style=color:#a6e22e>Queries</span>
+</span></span><span style=display:flex><span>{
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>internal</span> <span style=color:#66d9ef>static</span> <span style=color:#66d9ef>string</span> GetUsers =
+</span></span><span style=display:flex><span>        <span style=color:#e6db74>$@&#34;
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>        SELECT 
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            u.{TblUser.Id} AS {nameof(User.Id)},
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            u.{TblUser.Email} AS {nameof(User.Email)},
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            u.{TblUser.StartDate} AS {nameof(User.StartDate)},
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            u.{TblUser.EndDate} AS {nameof(User.EndDate)},
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            u.{TblUser.Participants} AS {nameof(User.Participants)},
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            p.{TblPerson.FirstName} AS {nameof(Person.FirstName)},
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            p.{TblPerson.LastName} AS {nameof(Person.LastName)},
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            p.{TblPerson.VNumber} AS {nameof(Person.VNumber)}
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            FROM
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            (
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>                SELECT TOP (@{nameof(GetUsersParam.Take)}) *
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>                FROM {TblUser.Table}
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>                WHERE 
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>                    {TblUser.Location} = @{nameof(GetUsersParam.Location)}
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>                AND {TblUser.Participants} = @{nameof(GetUsersParam.Participants)}
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>                AND {TblUser.RegisteredDate} &gt; @{nameof(GetUsersParam.FromRegistrationDate)}
+</span></span></span><span style=display:flex><span><span style=color:#e6db74>            ) u INNER JOIN {TblPerson.Table} p ON p.{TblPerson.UserId} = u.{TblUser.Id}&#34;</span>;
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>internal</span> <span style=color:#66d9ef>class</span> <span style=color:#a6e22e>GetUsersParam</span>
+</span></span><span style=display:flex><span>    {
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>public</span> GetUsersParam(Location location, <span style=color:#66d9ef>int</span> participants, <span style=color:#66d9ef>int</span> take, DateTime fromRegistrationDate)
+</span></span><span style=display:flex><span>        {
+</span></span><span style=display:flex><span>            Location = (<span style=color:#66d9ef>int</span>)location;
+</span></span><span style=display:flex><span>            Participants = participants;
+</span></span><span style=display:flex><span>            Take = take;
+</span></span><span style=display:flex><span>            FromRegistrationDate = fromRegistrationDate;
+</span></span><span style=display:flex><span>        }
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>public</span> DateTime FromRegistrationDate { <span style=color:#66d9ef>get</span>; }
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>public</span> <span style=color:#66d9ef>int</span> Location { <span style=color:#66d9ef>get</span>; }
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>public</span> <span style=color:#66d9ef>int</span> Take { <span style=color:#66d9ef>get</span>; }
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>public</span> <span style=color:#66d9ef>int</span> Participants { <span style=color:#66d9ef>get</span>; }
+</span></span><span style=display:flex><span>    }
+</span></span><span style=display:flex><span>}
+</span></span></code></pre></div><p>Can you see the &lsquo;<strong>{TblUser.Email}</strong>&rsquo; and parts like that in the query definition? If you rename or delete the &lsquo;Email&rsquo; column from &lsquo;TblUser&rsquo; database table you get the compilation error pointing you to the SQL query that uses &lsquo;TblUser.Email&rsquo; which does not exist anymore.</p><h3 id=query-to-domain-model-synchronization>Query to domain model synchronization</h3><p>You could also see the other part of the query: &lsquo;<strong>u.{TblUser.Email} AS {nameof(User.Email)}</strong>&rsquo;. As described above the &lsquo;<strong>{TblUser.Email}</strong>&rsquo; part sticks the SQL query to the database schema. From the other side &lsquo;<strong>{nameof(User.Email)}</strong>&rsquo; sticks the SQL query to the domain model property.</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-c# data-lang=c#><span style=display:flex><span><span style=color:#66d9ef>public</span> <span style=color:#66d9ef>class</span> <span style=color:#a6e22e>User</span>
+</span></span><span style=display:flex><span>{
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>public</span> Guid Id { <span style=color:#66d9ef>get</span>; <span style=color:#66d9ef>set</span>; }
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>public</span> <span style=color:#66d9ef>int</span> Participants { <span style=color:#66d9ef>get</span>; <span style=color:#66d9ef>set</span>; }
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>public</span> <span style=color:#66d9ef>string</span> Email { <span style=color:#66d9ef>get</span>; <span style=color:#66d9ef>set</span>; }
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>public</span> <span style=color:#66d9ef>string</span> Phone { <span style=color:#66d9ef>get</span>; <span style=color:#66d9ef>set</span>; }
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>public</span> DateTime StartDate { <span style=color:#66d9ef>get</span>; <span style=color:#66d9ef>set</span>; }
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>public</span> DateTime EndDate { <span style=color:#66d9ef>get</span>; <span style=color:#66d9ef>set</span>; }
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>public</span> Location Location { <span style=color:#66d9ef>get</span>; <span style=color:#66d9ef>set</span>; }
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>public</span> DateTime RegisteredDate { <span style=color:#66d9ef>get</span>; <span style=color:#66d9ef>set</span>; }
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>public</span> Person[] People { <span style=color:#66d9ef>get</span>; <span style=color:#66d9ef>set</span>; }
+</span></span><span style=display:flex><span>}
+</span></span></code></pre></div><p>If you define your SQL queries this way you will never miss the change in database schema or in domain model definition. Fixing defects of this kind is a pain. Believe me I had it.</p><p>At last, here is an example of how I execute query from example above and map the result to the domain model:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-c# data-lang=c#><span style=display:flex><span><span style=color:#66d9ef>var</span> users = <span style=color:#66d9ef>new</span> Dictionary&lt;Guid, User&gt;();
+</span></span><span style=display:flex><span><span style=color:#66d9ef>var</span> people = <span style=color:#66d9ef>new</span> Dictionary&lt;Guid, Collection&lt;Person&gt;&gt;();
+</span></span><span style=display:flex><span><span style=color:#66d9ef>await</span> connection.QueryAsync&lt;User, Person, User&gt;(
+</span></span><span style=display:flex><span>    Queries.GetUsers,
+</span></span><span style=display:flex><span>    (u, p) =&gt;
+</span></span><span style=display:flex><span>    {
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> (!users.ContainsKey(u.Id))
+</span></span><span style=display:flex><span>        {
+</span></span><span style=display:flex><span>            users.Add(u.Id, u);
+</span></span><span style=display:flex><span>        }
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>if</span> (!people.ContainsKey(u.Id))
+</span></span><span style=display:flex><span>        {
+</span></span><span style=display:flex><span>            people.Add(u.Id, <span style=color:#66d9ef>new</span> Collection&lt;Person&gt;());
+</span></span><span style=display:flex><span>        }
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>        people[u.Id].Add(p);
+</span></span><span style=display:flex><span>        <span style=color:#66d9ef>return</span> <span style=color:#66d9ef>null</span>!;
+</span></span><span style=display:flex><span>    },
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>new</span> Queries.GetUsersParam(location, participants, take, fromRegisteredDate ?? <span style=color:#66d9ef>new</span> DateTime(<span style=color:#ae81ff>2022</span>, <span style=color:#ae81ff>1</span>, <span style=color:#ae81ff>1</span>, <span style=color:#ae81ff>0</span>, <span style=color:#ae81ff>0</span>, <span style=color:#ae81ff>0</span>, DateTimeKind.Utc)),
+</span></span><span style=display:flex><span>    splitOn: nameof(Person.FirstName));
+</span></span><span style=display:flex><span><span style=color:#66d9ef>foreach</span> (<span style=color:#66d9ef>var</span> kvp <span style=color:#66d9ef>in</span> users)
+</span></span><span style=display:flex><span>{
+</span></span><span style=display:flex><span>    kvp.Value.People = people[kvp.Key].ToArray();
+</span></span><span style=display:flex><span>}
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span><span style=color:#66d9ef>return</span> users.Values.ToArray();
+</span></span></code></pre></div></div><h2>Comments</h2><div id=disqus_thread></div><script type=application/javascript>window.disqus_config=function(){},function(){if(["localhost","127.0.0.1"].indexOf(window.location.hostname)!=-1){document.getElementById("disqus_thread").innerHTML="Disqus comments not available by default when the website is previewed locally.";return}var t=document,e=t.createElement("script");e.async=!0,e.src="//byalexblog.disqus.com/embed.js",e.setAttribute("data-timestamp",+new Date),(t.head||t.body).appendChild(e)}()</script><noscript>Please enable JavaScript to view the <a href=https://disqus.com/?ref_noscript>comments powered by Disqus.</a></noscript><a href=https://disqus.com class=dsq-brlink>comments powered by <span class=logo-disqus>Disqus</span></a></main><script type=application/javascript>var doNotTrack=!1;doNotTrack||(function(e,t,n,s,o,i,a){e.GoogleAnalyticsObject=o,e[o]=e[o]||function(){(e[o].q=e[o].q||[]).push(arguments)},e[o].l=1*new Date,i=t.createElement(n),a=t.getElementsByTagName(n)[0],i.async=1,i.src=s,a.parentNode.insertBefore(i,a)}(window,document,"script","https://www.google-analytics.com/analytics.js","ga"),ga("create","UA-44968940-4","auto"),ga("send","pageview"))</script></body></html>
