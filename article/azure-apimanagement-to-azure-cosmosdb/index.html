@@ -1,0 +1,461 @@
+<!doctype html><html xmlns=http://www.w3.org/1999/xhtml xml:lang=en-us lang=en-us><head><link href=https://gmpg.org/xfn/11 rel=profile><meta charset=utf-8><meta name=generator content="Hugo 0.120.4"><meta name=viewport content="width=device-width,initial-scale=1"><title>Azure API Management to Azure Cosmosdb &#183; by Alex Code blog</title>
+<meta name=keywords content="Azure,API Management,CosmosDB,Terraform"><meta name=description content="How to use Azure API Management to expose Azure CosmosDB"><link type=text/css rel=stylesheet href=https://byalexblog.net/css/print.css media=print><link type=text/css rel=stylesheet href=https://byalexblog.net/css/poole.css><link type=text/css rel=stylesheet href=https://byalexblog.net/css/syntax.css><link type=text/css rel=stylesheet href=https://byalexblog.net/css/hyde.css><link type=text/css rel=stylesheet href=https://byalexblog.net/css/vs_theme_style.css><link rel=stylesheet href="https://fonts.googleapis.com/css?family=Abril+Fatface|PT+Sans:400,400i,700"><link rel=apple-touch-icon-precomposed sizes=144x144 href=/apple-touch-icon-144-precomposed.png><link rel="shortcut icon" href=/favicon.png></head><body><aside class=sidebar><div class=container><div class=sidebar-about><a href=https://byalexblog.net/><h1>by Alex Code blog</h1></a><p class=lead>Smart thoughts... and not very smart too!</p></div><nav><ul class=sidebar-nav><li><a href=https://byalexblog.net/>Home</a></li><li><a href=https://byalexblog.net/article>Articles</a></li><li><a href=https://github.com/lanubisl target=_blank>Github</a></li><li><a href=https://www.linkedin.com/in/panfilenok target=_blank>LinkedIn</a></li></ul></nav><p>&copy; 2023. All rights reserved.</p></div></aside><main class="content container"><div class=post><h1>Azure API Management to Azure Cosmosdb</h1><time datetime=2023-11-07T20:12:52Z class=post-date>Tue, Nov 7, 2023</time><p><img src=/images/azure-apimanagement-to-azure-cosmosdb/apim_cosmosdb_logo.jpeg alt>
+In my previous posts I have showed you how to connect <a href=https://byalexblog.net/article/azure-apimanagement-to-azure-service-bus/ target=_blank rel=noopener>Azure API Management to Azure Service Bus</a> and <a href=https://byalexblog.net/article/azure-apimanagement-to-azure-storage-account/ target=_blank rel=noopener>Azure API Management to Azure Storage account</a>. In this post I will show you how to connect Azure API Management to Azure Cosmosdb.</p><blockquote><p>At this point of time (7 Now 2023) Azure API Management has the policy <a href=https://learn.microsoft.com/en-us/azure/api-management/cosmosdb-data-source-policy target=_blank rel=noopener>cosmosdb-data-source</a> in preview and it is not supported in the Consumption Plan. So, you need to have Developer, Basic, Standard or Premium plan to use this policy.
+And even then I would not recommend to use this policy in production environment yet.</p></blockquote><p>Before we start, let&rsquo;s have a look at the architecture of our solution:
+<img src=/images/azure-apimanagement-to-azure-cosmosdb/architecture.jpeg alt></p><p>There is a significant limitation in this solution: <a href=https://learn.microsoft.com/en-us/rest/api/cosmos-db/querying-cosmosdb-resources-using-the-rest-api#queries-that-cannot-be-served-by-gateway target=_blank rel=noopener>NOT ALL TYPES OF QUERIES ARE SUPPORTED</a> by CosmosDB HTTP API.
+So if you want to use queries that include TOP, ORDER BY, OFFSET LIMIT, DISTINCT, GROUP BY, and aggregate functions like MAX, MIN, AVG, SUM, COUNT then <strong>this solution will not work for you</strong>.
+There is a workaround for the OFFSET LIMIT limitation, which is covered by this post. For other cases you will have to run compute resource behind the API Management to do the job and that compute resource will use native library to talk to Azure CosmosDB without such limitations.</p><p>If ALL your queries look like
+<code>SELECT {something} WHERE {condition}</code>then let&rsquo;s get started.</p><h2 id=1-create-azure-cosmosdb>1. Create Azure Cosmosdb</h2><p>I will use <a href=https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/ target=_blank rel=noopener>Azure Cosmos DB for NoSQL</a> database with Capacity mode: &ldquo;serverless&rdquo; for the purpose of this post. You can use any other plan as well.</p><p><img src=/images/azure-apimanagement-to-azure-cosmosdb/cosmosdb_type.png alt></p><p>In our solution we are going to use <a href=https://learn.microsoft.com/en-us/azure/cosmos-db/how-to-setup-rbac target=_blank rel=noopener>role-based access control</a> to access Azure Cosmosdb.
+Please note that this is <strong>NOT</strong> the same as <a href=https://learn.microsoft.com/en-us/azure/role-based-access-control/overview target=_blank rel=noopener>Azure RBAC</a> and cannot be configured in the Azure portal.
+You either need to use <a href="https://docs.microsoft.com/en-us/cli/azure/cosmosdb/sql/role?view=azure-cli-latest" target=_blank rel=noopener>Azure CLI</a> or <a href="https://learn.microsoft.com/en-us/powershell/module/az.cosmosdb/?view=azps-10.4.1" target=_blank rel=noopener>Azure PowerShell</a> to configure it.
+I will use <a href=https://www.terraform.io/ target=_blank rel=noopener>Terraform</a> instead (which uses Azure CLI under the hood).</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-hcl data-lang=hcl><span style=display:flex><span><span style=color:#75715e># Resource Group
+</span></span></span><span style=display:flex><span><span style=color:#75715e></span><span style=color:#66d9ef>resource</span> <span style=color:#e6db74>&#34;azurerm_resource_group&#34; &#34;rg&#34;</span> {
+</span></span><span style=display:flex><span>  name     <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;rg_samples_azure_cosmosdb_apim&#34;</span>
+</span></span><span style=display:flex><span>  location <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;westeurope&#34;</span>
+</span></span><span style=display:flex><span>}<span style=color:#75715e>
+</span></span></span><span style=display:flex><span><span style=color:#75715e>
+</span></span></span><span style=display:flex><span><span style=color:#75715e># CosmosDB Account
+</span></span></span><span style=display:flex><span><span style=color:#75715e></span><span style=color:#66d9ef>resource</span> <span style=color:#e6db74>&#34;azurerm_cosmosdb_account&#34; &#34;account&#34;</span> {
+</span></span><span style=display:flex><span>  name                <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;cosmon-samples-234f1f22a3&#34;</span>
+</span></span><span style=display:flex><span>  location            <span style=color:#f92672>=</span> <span style=color:#66d9ef>azurerm_resource_group</span>.<span style=color:#66d9ef>rg</span>.<span style=color:#66d9ef>location</span>
+</span></span><span style=display:flex><span>  resource_group_name <span style=color:#f92672>=</span> <span style=color:#66d9ef>azurerm_resource_group</span>.<span style=color:#66d9ef>rg</span>.<span style=color:#66d9ef>name</span>
+</span></span><span style=display:flex><span>  offer_type          <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;Standard&#34;</span>
+</span></span><span style=display:flex><span>  kind                <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;GlobalDocumentDB&#34;</span>
+</span></span><span style=display:flex><span>  
+</span></span><span style=display:flex><span>  <span style=color:#66d9ef>consistency_policy</span> {
+</span></span><span style=display:flex><span>    consistency_level <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;Session&#34;</span>
+</span></span><span style=display:flex><span>  }
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>  <span style=color:#66d9ef>geo_location</span> {
+</span></span><span style=display:flex><span>    location          <span style=color:#f92672>=</span> <span style=color:#66d9ef>azurerm_resource_group</span>.<span style=color:#66d9ef>rg</span>.<span style=color:#66d9ef>location</span>
+</span></span><span style=display:flex><span>    failover_priority <span style=color:#f92672>=</span> <span style=color:#ae81ff>0</span>
+</span></span><span style=display:flex><span>  }
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>  <span style=color:#66d9ef>capabilities</span> {
+</span></span><span style=display:flex><span>    name <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;EnableServerless&#34;</span>
+</span></span><span style=display:flex><span>  }
+</span></span><span style=display:flex><span>}<span style=color:#75715e>
+</span></span></span><span style=display:flex><span><span style=color:#75715e>
+</span></span></span><span style=display:flex><span><span style=color:#75715e># CosmosDB Database
+</span></span></span><span style=display:flex><span><span style=color:#75715e></span><span style=color:#66d9ef>resource</span> <span style=color:#e6db74>&#34;azurerm_cosmosdb_sql_database&#34; &#34;database&#34;</span> {
+</span></span><span style=display:flex><span>  name                <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;mydatabase&#34;</span>
+</span></span><span style=display:flex><span>  resource_group_name <span style=color:#f92672>=</span> <span style=color:#66d9ef>azurerm_resource_group</span>.<span style=color:#66d9ef>rg</span>.<span style=color:#66d9ef>name</span>
+</span></span><span style=display:flex><span>  account_name        <span style=color:#f92672>=</span> <span style=color:#66d9ef>azurerm_cosmosdb_account</span>.<span style=color:#66d9ef>account</span>.<span style=color:#66d9ef>name</span>
+</span></span><span style=display:flex><span>}<span style=color:#75715e>
+</span></span></span><span style=display:flex><span><span style=color:#75715e>
+</span></span></span><span style=display:flex><span><span style=color:#75715e># CosmosDB Container
+</span></span></span><span style=display:flex><span><span style=color:#75715e></span><span style=color:#66d9ef>resource</span> <span style=color:#e6db74>&#34;azurerm_cosmosdb_sql_container&#34; &#34;container&#34;</span> {
+</span></span><span style=display:flex><span>  name                  <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;mycontainer&#34;</span>
+</span></span><span style=display:flex><span>  resource_group_name   <span style=color:#f92672>=</span> <span style=color:#66d9ef>azurerm_resource_group</span>.<span style=color:#66d9ef>rg</span>.<span style=color:#66d9ef>name</span>
+</span></span><span style=display:flex><span>  account_name          <span style=color:#f92672>=</span> <span style=color:#66d9ef>azurerm_cosmosdb_account</span>.<span style=color:#66d9ef>account</span>.<span style=color:#66d9ef>name</span>
+</span></span><span style=display:flex><span>  database_name         <span style=color:#f92672>=</span> <span style=color:#66d9ef>azurerm_cosmosdb_sql_database</span>.<span style=color:#66d9ef>database</span>.<span style=color:#66d9ef>name</span>
+</span></span><span style=display:flex><span>  partition_key_path    <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;/id&#34;</span>
+</span></span><span style=display:flex><span>  partition_key_version <span style=color:#f92672>=</span> <span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span>  <span style=color:#66d9ef>indexing_policy</span> {
+</span></span><span style=display:flex><span>    indexing_mode <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;consistent&#34;</span>
+</span></span><span style=display:flex><span>    <span style=color:#66d9ef>included_path</span> {
+</span></span><span style=display:flex><span>      path <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;/*&#34;</span>
+</span></span><span style=display:flex><span>    }
+</span></span><span style=display:flex><span>  }
+</span></span><span style=display:flex><span>}
+</span></span></code></pre></div><h2 id=2-create-azure-api-management>2. Create Azure API Management</h2><p>I will create Azure API Management using <a href=https://www.terraform.io/ target=_blank rel=noopener>Terraform</a> as well.</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-hcl data-lang=hcl><span style=display:flex><span><span style=color:#66d9ef>resource</span> <span style=color:#e6db74>&#34;azurerm_api_management&#34; &#34;apim&#34;</span> {
+</span></span><span style=display:flex><span>  name                <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;apim-samples-234f1f22a3&#34;</span>
+</span></span><span style=display:flex><span>  location            <span style=color:#f92672>=</span> <span style=color:#66d9ef>azurerm_resource_group</span>.<span style=color:#66d9ef>rg</span>.<span style=color:#66d9ef>location</span>
+</span></span><span style=display:flex><span>  resource_group_name <span style=color:#f92672>=</span> <span style=color:#66d9ef>azurerm_resource_group</span>.<span style=color:#66d9ef>rg</span>.<span style=color:#66d9ef>name</span>
+</span></span><span style=display:flex><span>  publisher_name      <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;Alex&#34;</span>
+</span></span><span style=display:flex><span>  publisher_email     <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;alexander.panfilenok@gmail.com&#34;</span>
+</span></span><span style=display:flex><span>  sku_name            <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;Consumption_0&#34;</span>
+</span></span><span style=display:flex><span>  <span style=color:#66d9ef>identity</span> {
+</span></span><span style=display:flex><span>    type <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;SystemAssigned&#34;</span>
+</span></span><span style=display:flex><span>  }
+</span></span><span style=display:flex><span>}
+</span></span></code></pre></div><h2 id=3-link-azure-api-management-to-azure-cosmosdb>3. Link Azure API Management to Azure Cosmosdb</h2><p>Now we need to tell Azure CosmosDB that Azure API Management is allowed to access it.</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-hcl data-lang=hcl><span style=display:flex><span><span style=color:#75715e># CosmosDB SQL Role Definition that allows to read data from CosmosDB
+</span></span></span><span style=display:flex><span><span style=color:#75715e></span><span style=color:#66d9ef>resource</span> <span style=color:#e6db74>&#34;azurerm_cosmosdb_sql_role_definition&#34; &#34;role_definition&#34;</span> {
+</span></span><span style=display:flex><span>  name                <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;roledefinition&#34;</span>
+</span></span><span style=display:flex><span>  resource_group_name <span style=color:#f92672>=</span> <span style=color:#66d9ef>azurerm_resource_group</span>.<span style=color:#66d9ef>rg</span>.<span style=color:#66d9ef>name</span>
+</span></span><span style=display:flex><span>  account_name        <span style=color:#f92672>=</span> <span style=color:#66d9ef>azurerm_cosmosdb_account</span>.<span style=color:#66d9ef>account</span>.<span style=color:#66d9ef>name</span>
+</span></span><span style=display:flex><span>  type                <span style=color:#f92672>=</span> <span style=color:#e6db74>&#34;CustomRole&#34;</span>
+</span></span><span style=display:flex><span>  assignable_scopes   <span style=color:#f92672>=</span> [<span style=color:#66d9ef>azurerm_cosmosdb_account</span>.<span style=color:#66d9ef>account</span>.<span style=color:#66d9ef>id</span>]
+</span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>  <span style=color:#66d9ef>permissions</span> {
+</span></span><span style=display:flex><span>    data_actions <span style=color:#f92672>=</span> [
+</span></span><span style=display:flex><span>      <span style=color:#e6db74>&#34;Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/readChangeFeed&#34;</span>,
+</span></span><span style=display:flex><span>      <span style=color:#e6db74>&#34;Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/executeQuery&#34;</span>,
+</span></span><span style=display:flex><span>      <span style=color:#e6db74>&#34;Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/items/read&#34;</span>,
+</span></span><span style=display:flex><span>      <span style=color:#e6db74>&#34;Microsoft.DocumentDB/databaseAccounts/readMetadata&#34;</span>
+</span></span><span style=display:flex><span>    ]
+</span></span><span style=display:flex><span>  }
+</span></span><span style=display:flex><span>}<span style=color:#75715e>
+</span></span></span><span style=display:flex><span><span style=color:#75715e>
+</span></span></span><span style=display:flex><span><span style=color:#75715e># CosmosDB SQL Role Assignment that assigns the role to Azure API Management
+</span></span></span><span style=display:flex><span><span style=color:#75715e></span><span style=color:#66d9ef>resource</span> <span style=color:#e6db74>&#34;azurerm_cosmosdb_sql_role_assignment&#34; &#34;am_cosmosdb_sql_assignment&#34;</span> {
+</span></span><span style=display:flex><span>  resource_group_name <span style=color:#f92672>=</span> <span style=color:#66d9ef>azurerm_resource_group</span>.<span style=color:#66d9ef>rg</span>.<span style=color:#66d9ef>name</span>
+</span></span><span style=display:flex><span>  account_name        <span style=color:#f92672>=</span> <span style=color:#66d9ef>azurerm_cosmosdb_account</span>.<span style=color:#66d9ef>account</span>.<span style=color:#66d9ef>name</span>
+</span></span><span style=display:flex><span>  role_definition_id  <span style=color:#f92672>=</span> <span style=color:#66d9ef>azurerm_cosmosdb_sql_role_definition</span>.<span style=color:#66d9ef>role_definition</span>.<span style=color:#66d9ef>id</span>
+</span></span><span style=display:flex><span>  principal_id        <span style=color:#f92672>=</span> <span style=color:#66d9ef>azurerm_api_management</span>.<span style=color:#66d9ef>apim</span>.<span style=color:#66d9ef>identity</span>[<span style=color:#ae81ff>0</span>].<span style=color:#66d9ef>principal_id</span>
+</span></span><span style=display:flex><span>  scope               <span style=color:#f92672>=</span> <span style=color:#66d9ef>azurerm_cosmosdb_account</span>.<span style=color:#66d9ef>account</span>.<span style=color:#66d9ef>id</span>
+</span></span><span style=display:flex><span>}
+</span></span></code></pre></div><p>Now CosmosDB is ready to accept requests from Azure API Management.</p><h2 id=4-create-api-endpoints-in-azure-api-management>4. Create API endpoints in Azure API Management</h2><p>In order to demonstrate you an example of such endpoint I will skip the terraform code for API and will show you the screenshot of the Azure Portal instead.</p><p>I have created 2 API endpoints: one is to get a document by id and another one is to get list of documents by some condition.
+An important part is an Inbound policy that is used to connect to Azure CosmosDB.</p><h3 id=41-get-document-by-id>4.1. Get document by id</h3><p><img src=/images/azure-apimanagement-to-azure-cosmosdb/endp1.png alt></p><pre tabindex=0><code>&lt;inbound&gt;
+  &lt;base /&gt;
+  &lt;set-backend-service 
+    base-url=&#34;https://cosmon-samples-234f1f22a3.documents.azure.com:443/&#34; /&gt;
+  &lt;authentication-managed-identity 
+    resource=&#34;https://cosmon-samples-234f1f22a3.documents.azure.com&#34; 
+    output-token-variable-name=&#34;msi-access-token&#34; 
+    ignore-error=&#34;false&#34; /&gt;
+  &lt;set-header name=&#34;Authorization&#34; exists-action=&#34;override&#34;&gt;
+    &lt;value&gt;@(&#34;type=aad&amp;ver=1.0&amp;sig=&#34; + context.Variables[&#34;msi-access-token&#34;])&lt;/value&gt;
+  &lt;/set-header&gt;
+  &lt;set-header name=&#34;x-ms-date&#34; exists-action=&#34;override&#34;&gt;
+    &lt;value&gt;@(DateTime.UtcNow.ToString(&#34;r&#34;))&lt;/value&gt;
+  &lt;/set-header&gt;
+  &lt;set-header name=&#34;x-ms-version&#34; exists-action=&#34;override&#34;&gt;
+    &lt;value&gt;2018-12-31&lt;/value&gt;
+  &lt;/set-header&gt;
+  &lt;rewrite-uri 
+    template=&#34;/dbs/mydatabase/colls/mycontainer/docs/&#34; 
+    copy-unmatched-params=&#34;false&#34; /&gt;
+  &lt;set-header name=&#34;x-ms-documentdb-partitionkey&#34; exists-action=&#34;override&#34;&gt;
+    &lt;value&gt;@(&#34;[\&#34;&#34; + context.Request.MatchedParameters[&#34;id&#34;] + &#34;\&#34;]&#34;)&lt;/value&gt;
+  &lt;/set-header&gt;
+&lt;/inbound&gt;
+</code></pre><p>There are several important parts in this policy:</p><pre tabindex=0><code>&lt;set-backend-service base-url=&#34;https://cosmon-samples-234f1f22a3.documents.azure.com:443/&#34; /&gt;
+</code></pre><p>this is the URL of Azure CosmosDB account. You can find it in Azure Portal in the Overview section of your Azure CosmosDB account.</p><pre tabindex=0><code>&lt;authentication-managed-identity 
+    resource=&#34;https://cosmon-samples-234f1f22a3.documents.azure.com&#34; 
+    output-token-variable-name=&#34;msi-access-token&#34; ignore-error=&#34;false&#34; /&gt;
+</code></pre><p>this is the part that tells Azure API Management to use Managed Identity to authenticate to Azure CosmosDB. You can find more details about it <a href=https://learn.microsoft.com/en-us/azure/api-management/authentication-managed-identity-policy target=_blank rel=noopener>here</a>.</p><pre tabindex=0><code>&lt;set-header name=&#34;Authorization&#34; exists-action=&#34;override&#34;&gt;
+    &lt;value&gt;@(&#34;type=aad&amp;ver=1.0&amp;sig=&#34; + context.Variables[&#34;msi-access-token&#34;])&lt;/value&gt;
+&lt;/set-header&gt;
+</code></pre><p>this is the authorization header that is used to authenticate to Azure CosmosDB. You can find more details about <a href=https://learn.microsoft.com/en-us/azure/api-management/set-header-policy target=_blank rel=noopener>set-header</a> and <a href="https://learn.microsoft.com/en-us/rest/api/cosmos-db/access-control-on-cosmosdb-resources?redirectedfrom=MSDN" target=_blank rel=noopener>Authorization header</a>.</p><pre tabindex=0><code>&lt;rewrite-uri 
+    template=&#34;/dbs/mydatabase/colls/mycontainer/docs/&#34; 
+    copy-unmatched-params=&#34;false&#34; /&gt;
+</code></pre><p>This is the policy that modifies the request URI to match CosmosDB HTTP API endpoint. You can find more details about <a href=https://learn.microsoft.com/en-us/azure/api-management/rewrite-uri-policy target=_blank rel=noopener>rewrite-uri</a> it <a href=https://learn.microsoft.com/en-us/rest/api/cosmos-db/cosmosdb-resource-uri-syntax-for-rest target=_blank rel=noopener>CosmosDB HTTP Endpoints</a>.</p><pre tabindex=0><code>&lt;set-header name=&#34;x-ms-documentdb-partitionkey&#34; exists-action=&#34;override&#34;&gt;
+    &lt;value&gt;@(&#34;[\&#34;&#34; + context.Request.MatchedParameters[&#34;id&#34;] + &#34;\&#34;]&#34;)&lt;/value&gt;
+&lt;/set-header&gt;
+</code></pre><p>this header is used to specify the partition key. You can find more details about it <a href=https://learn.microsoft.com/en-us/rest/api/cosmos-db/common-cosmosdb-rest-request-headers target=_blank rel=noopener>here</a>.</p><h3 id=42-get-list-of-documents-by-condition-with-pagination>4.2. Get list of documents by condition with pagination</h3><p>The second endpoint is very similar to the first one. The only difference is that it uses <a href=https://learn.microsoft.com/en-us/rest/api/cosmos-db/querying-cosmosdb-resources-using-the-rest-api#queries-that-can-be-served-by-gateway target=_blank rel=noopener>query parameter</a> instead of path parameter to specify the partition key.</p><p><img src=/images/azure-apimanagement-to-azure-cosmosdb/endp2.png alt></p><pre tabindex=0><code>&lt;inbound&gt;
+    &lt;base /&gt;
+    &lt;choose&gt;
+        &lt;when condition=&#34;@{
+            var takeStr = context.Request.MatchedParameters[&#39;take&#39;];
+            var takeInt = 0;
+            if (!int.TryParse(takeStr, out takeInt)) {
+                return true;
+            }
+
+            if (takeInt &gt; 0 &amp;&amp; takeInt &lt;= 1000) {
+                return false;
+            }
+
+            return true;
+        }&#34;&gt;
+            &lt;return-response&gt;
+                &lt;set-status code=&#34;400&#34; reason=&#34;Bad Request&#34; /&gt;
+                &lt;set-header name=&#34;Context-Type&#34; exists-action=&#34;override&#34;&gt;
+                    &lt;value&gt;text/plain&lt;/value&gt;
+                &lt;/set-header&gt;
+                &lt;set-body&gt;parameter &#39;take&#39; is invalid&lt;/set-body&gt;
+            &lt;/return-response&gt;
+        &lt;/when&gt;
+    &lt;/choose&gt;
+    &lt;choose&gt;
+        &lt;when condition=&#34;@(context.Request.Headers.GetValueOrDefault(&#34;from&#34;, &#34;&#34;) != &#34;&#34;)&#34;&gt;
+            &lt;set-header name=&#34;x-ms-continuation&#34; exists-action=&#34;override&#34;&gt;
+                &lt;value&gt;@(context.Request.Headers.GetValueOrDefault(&#34;from&#34;, &#34;&#34;))&lt;/value&gt;
+            &lt;/set-header&gt;
+        &lt;/when&gt;
+    &lt;/choose&gt;
+    &lt;set-backend-service
+      base-url=&#34;https://cosmon-samples-234f1f22a3.documents.azure.com:443/&#34; /&gt;
+    &lt;set-method&gt;POST&lt;/set-method&gt;
+    &lt;authentication-managed-identity
+      resource=&#34;https://cosmon-samples-234f1f22a3.documents.azure.com&#34;
+      output-token-variable-name=&#34;msi-access-token&#34;
+      ignore-error=&#34;false&#34; /&gt;
+    &lt;set-header name=&#34;Authorization&#34; exists-action=&#34;override&#34;&gt;
+        &lt;value&gt;@(&#34;type=aad&amp;ver=1.0&amp;sig=&#34; + context.Variables[&#34;msi-access-token&#34;])&lt;/value&gt;
+    &lt;/set-header&gt;
+    &lt;set-header name=&#34;x-ms-date&#34; exists-action=&#34;override&#34;&gt;
+        &lt;value&gt;@(DateTime.UtcNow.ToString(&#34;r&#34;))&lt;/value&gt;
+    &lt;/set-header&gt;
+    &lt;set-header name=&#34;x-ms-version&#34; exists-action=&#34;override&#34;&gt;
+        &lt;value&gt;2018-12-31&lt;/value&gt;
+    &lt;/set-header&gt;
+    &lt;set-header name=&#34;x-ms-documentdb-isquery&#34; exists-action=&#34;override&#34;&gt;
+        &lt;value&gt;True&lt;/value&gt;
+    &lt;/set-header&gt;
+    &lt;set-header name=&#34;x-ms-documentdb-query-enablecrosspartition&#34; exists-action=&#34;override&#34;&gt;
+        &lt;value&gt;True&lt;/value&gt;
+    &lt;/set-header&gt;
+    &lt;rewrite-uri 
+      template=&#34;/dbs/mydatabase/colls/mycontainer/docs&#34;
+      copy-unmatched-params=&#34;false&#34; /&gt;
+    &lt;set-header name=&#34;Content-Type&#34; exists-action=&#34;override&#34;&gt;
+        &lt;value&gt;application/query+json&lt;/value&gt;
+    &lt;/set-header&gt;
+    &lt;set-header name=&#34;x-ms-max-item-count&#34; exists-action=&#34;override&#34;&gt;
+        &lt;value&gt;@(context.Request.MatchedParameters[&#34;take&#34;])&lt;/value&gt;
+    &lt;/set-header&gt;
+    &lt;set-body&gt;@(&#34;{\&#34;query\&#34;: \&#34;SELECT * FROM c\&#34; }&#34;)&lt;/set-body&gt;
+&lt;/inbound&gt;
+</code></pre><p>I will comment some parts of this policy that are different from the previous one.</p><pre tabindex=0><code>&lt;choose&gt;
+    &lt;when condition=&#34;@{
+        var takeStr = context.Request.MatchedParameters[&#39;take&#39;];
+        var takeInt = 0;
+        if (!int.TryParse(takeStr, out takeInt)) {
+            return true;
+        }
+
+        if (takeInt &gt; 0 &amp;&amp; takeInt &lt;= 1000) {
+            return false;
+        }
+
+        return true;
+    }&#34;&gt;
+        &lt;return-response&gt;
+            &lt;set-status code=&#34;400&#34; reason=&#34;Bad Request&#34; /&gt;
+            &lt;set-header name=&#34;Context-Type&#34; exists-action=&#34;override&#34;&gt;
+                &lt;value&gt;text/plain&lt;/value&gt;
+            &lt;/set-header&gt;
+            &lt;set-body&gt;parameter &#39;take&#39; is invalid&lt;/set-body&gt;
+        &lt;/return-response&gt;
+    &lt;/when&gt;
+&lt;/choose&gt;
+</code></pre><p>this part is responsible for validation of the query parameter &ldquo;take&rdquo;. It should be a number between 1 and 1000. If it is not then the request will be rejected with 400 Bad Request.
+later in the policy we will use this parameter to specify the number of documents to return:</p><pre tabindex=0><code>&lt;set-header name=&#34;x-ms-max-item-count&#34; exists-action=&#34;override&#34;&gt;
+    &lt;value&gt;@(context.Request.MatchedParameters[&#34;take&#34;])&lt;/value&gt;
+&lt;/set-header&gt;
+</code></pre><p>you can learn more about <a href=https://learn.microsoft.com/en-us/azure/api-management/choose-policy target=_blank rel=noopener>choole</a> policy, <a href=https://learn.microsoft.com/en-us/azure/api-management/return-response-policy target=_blank rel=noopener>return-response</a> policy and x-ms-max-item-count header <a href=https://learn.microsoft.com/en-us/rest/api/cosmos-db/querying-cosmosdb-resources-using-the-rest-api#pagination-of-query-results target=_blank rel=noopener>here</a> and <a href=https://learn.microsoft.com/en-us/rest/api/cosmos-db/query-documents#headers target=_blank rel=noopener>here</a></p><pre tabindex=0><code>&lt;choose&gt;
+    &lt;when condition=&#34;@(context.Request.Headers.GetValueOrDefault(&#34;from&#34;, &#34;&#34;) != &#34;&#34;)&#34;&gt;
+        &lt;set-header name=&#34;x-ms-continuation&#34; exists-action=&#34;override&#34;&gt;
+            &lt;value&gt;@(context.Request.Headers.GetValueOrDefault(&#34;from&#34;, &#34;&#34;))&lt;/value&gt;
+        &lt;/set-header&gt;
+    &lt;/when&gt;
+&lt;/choose&gt;
+</code></pre><p>this part is responsible for the second part of the pagination. For my case it is expected that the <a href=https://learn.microsoft.com/en-us/rest/api/cosmos-db/querying-cosmosdb-resources-using-the-rest-api#pagination-of-query-results target=_blank rel=noopener>continuation token</a> that is returned by CosmosDB is passed back to the API Management in the header &ldquo;from&rdquo;. If it is present then it will be passed to CosmosDB in the header &ldquo;x-ms-continuation&rdquo;.</p><pre tabindex=0><code>&lt;set-body&gt;@(&#34;{\&#34;query\&#34;: \&#34;SELECT * FROM c\&#34; }&#34;)&lt;/set-body&gt;
+</code></pre><p>this is the query that is passed to CosmosDB. For reasons of simplicity I do not use &ldquo;where&rdquo; clause here, but you can do that easily and pass the condition arguments as a query parameters. You can read about the syntax of the query <a href=https://learn.microsoft.com/en-us/rest/api/cosmos-db/query-documents#body target=_blank rel=noopener>here</a>.</p><h2 id=5-test-the-solution>5. Test the solution</h2><p>First, let&rsquo;s add couple of documents to CosmosDB.</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-json data-lang=json><span style=display:flex><span>{
+</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;id&#34;</span>: <span style=color:#e6db74>&#34;123&#34;</span>,
+</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;name&#34;</span>: <span style=color:#e6db74>&#34;Alex&#34;</span>,
+</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;_rid&#34;</span>: <span style=color:#e6db74>&#34;YVEzAK5GDSwBAAAAAAAAAA==&#34;</span>,
+</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;_self&#34;</span>: <span style=color:#e6db74>&#34;dbs/YVEzAA==/colls/YVEzAK5GDSw=/docs/YVEzAK5GDSwBAAAAAAAAAA==/&#34;</span>,
+</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;_etag&#34;</span>: <span style=color:#e6db74>&#34;\&#34;7a002c05-0000-0d00-0000-65494dc10000\&#34;&#34;</span>,
+</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;_attachments&#34;</span>: <span style=color:#e6db74>&#34;attachments/&#34;</span>,
+</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;_ts&#34;</span>: <span style=color:#ae81ff>1699302849</span>
+</span></span><span style=display:flex><span>}<span style=color:#960050;background-color:#1e0010>,</span>
+</span></span><span style=display:flex><span>{
+</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;id&#34;</span>: <span style=color:#e6db74>&#34;122&#34;</span>,
+</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;name&#34;</span>: <span style=color:#e6db74>&#34;Elena&#34;</span>,
+</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;_rid&#34;</span>: <span style=color:#e6db74>&#34;YVEzAK5GDSwCAAAAAAAAAA==&#34;</span>,
+</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;_self&#34;</span>: <span style=color:#e6db74>&#34;dbs/YVEzAA==/colls/YVEzAK5GDSw=/docs/YVEzAK5GDSwCAAAAAAAAAA==/&#34;</span>,
+</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;_etag&#34;</span>: <span style=color:#e6db74>&#34;\&#34;7a00430a-0000-0d00-0000-65494ec70000\&#34;&#34;</span>,
+</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;_attachments&#34;</span>: <span style=color:#e6db74>&#34;attachments/&#34;</span>,
+</span></span><span style=display:flex><span>    <span style=color:#f92672>&#34;_ts&#34;</span>: <span style=color:#ae81ff>1699303111</span>
+</span></span><span style=display:flex><span>}
+</span></span></code></pre></div><p>Then let&rsquo;s test the first endpoint to get document by id.</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-http data-lang=http><span style=display:flex><span><span style=color:#a6e22e>GET</span> https://apim-samples-234f1f22a3.azure-api.net/document/123 <span style=color:#66d9ef>HTTP</span><span style=color:#f92672>/</span><span style=color:#ae81ff>1.1</span>
+</span></span><span style=display:flex><span>Host<span style=color:#f92672>:</span> <span style=color:#ae81ff>apim-samples-234f1f22a3.azure-api.net</span>
+</span></span></code></pre></div><p>the response is:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-http data-lang=http><span style=display:flex><span><span style=color:#66d9ef>HTTP</span><span style=color:#f92672>/</span><span style=color:#ae81ff>1.1</span> <span style=color:#ae81ff>200</span> <span style=color:#a6e22e>Ok</span>
+</span></span><span style=display:flex><span>cache-control<span style=color:#f92672>:</span> <span style=color:#ae81ff>no-store, no-cache</span>
+</span></span><span style=display:flex><span>content-encoding<span style=color:#f92672>:</span> <span style=color:#ae81ff>gzip</span>
+</span></span><span style=display:flex><span>content-location<span style=color:#f92672>:</span> <span style=color:#ae81ff>https://cosmon-samples-234f1f22a3.documents.azure.com/dbs/mydatabase/colls/mycontainer/docs/</span>
+</span></span><span style=display:flex><span>content-type<span style=color:#f92672>:</span> <span style=color:#ae81ff>application/json</span>
+</span></span><span style=display:flex><span>date<span style=color:#f92672>:</span> <span style=color:#ae81ff>Wed, 08 Nov 2023 21:47:24 GMT</span>
+</span></span><span style=display:flex><span>lsn<span style=color:#f92672>:</span> <span style=color:#ae81ff>33</span>
+</span></span><span style=display:flex><span>pragma<span style=color:#f92672>:</span> <span style=color:#ae81ff>no-cache</span>
+</span></span><span style=display:flex><span>strict-transport-security<span style=color:#f92672>:</span> <span style=color:#ae81ff>max-age=31536000</span>
+</span></span><span style=display:flex><span>transfer-encoding<span style=color:#f92672>:</span> <span style=color:#ae81ff>chunked</span>
+</span></span><span style=display:flex><span>vary<span style=color:#f92672>:</span> <span style=color:#ae81ff>Accept-Encoding,Origin</span>
+</span></span><span style=display:flex><span>x-ms-aad-applied-role-assignment<span style=color:#f92672>:</span> <span style=color:#ae81ff>,a654236b-8ba1-0dd2-7a87-43dd83a89fa5</span>
+</span></span><span style=display:flex><span>x-ms-activity-id<span style=color:#f92672>:</span> <span style=color:#ae81ff>27d187fc-8a4a-422d-a517-956bdd94ca4f</span>
+</span></span><span style=display:flex><span>x-ms-alt-content-path<span style=color:#f92672>:</span> <span style=color:#ae81ff>dbs/mydatabase/colls/mycontainer</span>
+</span></span><span style=display:flex><span>x-ms-content-path<span style=color:#f92672>:</span> <span style=color:#ae81ff>YVEzAK5GDSw=</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-is-partition-key-delete-pending<span style=color:#f92672>:</span> <span style=color:#ae81ff>false</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-llsn<span style=color:#f92672>:</span> <span style=color:#ae81ff>33</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-physical-partition-id<span style=color:#f92672>:</span> <span style=color:#ae81ff>0</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-query-execution-info<span style=color:#f92672>:</span> <span style=color:#ae81ff>{&#34;reverseRidEnabled&#34;:false,&#34;reverseIndexScan&#34;:false}</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-quorum-acked-llsn<span style=color:#f92672>:</span> <span style=color:#ae81ff>33</span>
+</span></span><span style=display:flex><span>x-ms-current-replica-set-size<span style=color:#f92672>:</span> <span style=color:#ae81ff>4</span>
+</span></span><span style=display:flex><span>x-ms-current-write-quorum<span style=color:#f92672>:</span> <span style=color:#ae81ff>3</span>
+</span></span><span style=display:flex><span>x-ms-documentdb-partitionkeyrangeid<span style=color:#f92672>:</span> <span style=color:#ae81ff>0</span>
+</span></span><span style=display:flex><span>x-ms-gatewayversion<span style=color:#f92672>:</span> <span style=color:#ae81ff>version=2.14.0</span>
+</span></span><span style=display:flex><span>x-ms-global-committed-lsn<span style=color:#f92672>:</span> <span style=color:#ae81ff>33</span>
+</span></span><span style=display:flex><span>x-ms-item-count<span style=color:#f92672>:</span> <span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span>x-ms-last-state-change-utc<span style=color:#f92672>:</span> <span style=color:#ae81ff>Mon,06 Nov 2023 20:05:32.452 GMT</span>
+</span></span><span style=display:flex><span>x-ms-number-of-read-regions<span style=color:#f92672>:</span> <span style=color:#ae81ff>0</span>
+</span></span><span style=display:flex><span>x-ms-quorum-acked-lsn<span style=color:#f92672>:</span> <span style=color:#ae81ff>33</span>
+</span></span><span style=display:flex><span>x-ms-request-charge<span style=color:#f92672>:</span> <span style=color:#ae81ff>2.82</span>
+</span></span><span style=display:flex><span>x-ms-request-duration-ms<span style=color:#f92672>:</span> <span style=color:#ae81ff>20.375</span>
+</span></span><span style=display:flex><span>x-ms-resource-quota<span style=color:#f92672>:</span> <span style=color:#ae81ff>documentSize=51200;documentsSize=52428800;documentsCount=-1;collectionSize=52428800;</span>
+</span></span><span style=display:flex><span>x-ms-resource-usage<span style=color:#f92672>:</span> <span style=color:#ae81ff>documentSize=0;documentsSize=0;documentsCount=2;collectionSize=0;</span>
+</span></span><span style=display:flex><span>x-ms-schemaversion<span style=color:#f92672>:</span> <span style=color:#ae81ff>1.16</span>
+</span></span><span style=display:flex><span>x-ms-serviceversion<span style=color:#f92672>:</span> <span style=color:#ae81ff>version=2.14.0.0</span>
+</span></span><span style=display:flex><span>x-ms-session-token<span style=color:#f92672>:</span> <span style=color:#ae81ff>0:-1#33</span>
+</span></span><span style=display:flex><span>x-ms-transport-request-id<span style=color:#f92672>:</span> <span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span>x-ms-xp-role<span style=color:#f92672>:</span> <span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span>   <span style=color:#ae81ff> </span>
+</span></span><span style=display:flex><span><span style=color:#960050;background-color:#1e0010>{</span>
+</span></span><span style=display:flex><span>    <span style=color:#e6db74>&#34;_rid&#34;</span><span style=color:#960050;background-color:#1e0010>:</span> <span style=color:#e6db74>&#34;YVEzAK5GDSw=&#34;</span><span style=color:#960050;background-color:#1e0010>,</span>
+</span></span><span style=display:flex><span>    <span style=color:#e6db74>&#34;Documents&#34;</span><span style=color:#960050;background-color:#1e0010>:</span> [{
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;id&#34;</span>: <span style=color:#e6db74>&#34;123&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;name&#34;</span>: <span style=color:#e6db74>&#34;Alex&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;_rid&#34;</span>: <span style=color:#e6db74>&#34;YVEzAK5GDSwBAAAAAAAAAA==&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;_self&#34;</span>: <span style=color:#e6db74>&#34;dbs\/YVEzAA==\/colls\/YVEzAK5GDSw=\/docs\/YVEzAK5GDSwBAAAAAAAAAA==\/&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;_etag&#34;</span>: <span style=color:#e6db74>&#34;\&#34;7a002c05-0000-0d00-0000-65494dc10000\&#34;&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;_attachments&#34;</span>: <span style=color:#e6db74>&#34;attachments\/&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;_ts&#34;</span>: <span style=color:#ae81ff>1699302849</span>
+</span></span><span style=display:flex><span>    }]<span style=color:#960050;background-color:#1e0010>,</span>
+</span></span><span style=display:flex><span>    <span style=color:#e6db74>&#34;_count&#34;</span><span style=color:#960050;background-color:#1e0010>:</span> <span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span><span style=color:#960050;background-color:#1e0010>}</span>
+</span></span></code></pre></div><p>I&rsquo;m sure you can figure out how to remove unnecessary headers from the response ;)</p><p>Now, let&rsquo;s test the second endpoint to get list of documents by condition with pagination.
+Since I have only 2 documents in my database I will set the parameter &ldquo;take&rdquo; to 1 to demonstrate the pagination.</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-http data-lang=http><span style=display:flex><span><span style=color:#a6e22e>GET</span> https://apim-samples-234f1f22a3.azure-api.net/document/take/1 <span style=color:#66d9ef>HTTP</span><span style=color:#f92672>/</span><span style=color:#ae81ff>1.1</span>
+</span></span><span style=display:flex><span>Host<span style=color:#f92672>:</span> <span style=color:#ae81ff>apim-samples-234f1f22a3.azure-api.net</span>
+</span></span></code></pre></div><p>the response is:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-http data-lang=http><span style=display:flex><span><span style=color:#66d9ef>HTTP</span><span style=color:#f92672>/</span><span style=color:#ae81ff>1.1</span> <span style=color:#ae81ff>200</span> <span style=color:#a6e22e>Ok</span>
+</span></span><span style=display:flex><span>cache-control<span style=color:#f92672>:</span> <span style=color:#ae81ff>no-store, no-cache</span>
+</span></span><span style=display:flex><span>content-encoding<span style=color:#f92672>:</span> <span style=color:#ae81ff>gzip</span>
+</span></span><span style=display:flex><span>content-type<span style=color:#f92672>:</span> <span style=color:#ae81ff>application/json</span>
+</span></span><span style=display:flex><span>date<span style=color:#f92672>:</span> <span style=color:#ae81ff>Wed, 08 Nov 2023 21:51:17 GMT</span>
+</span></span><span style=display:flex><span>lsn<span style=color:#f92672>:</span> <span style=color:#ae81ff>34</span>
+</span></span><span style=display:flex><span>pragma<span style=color:#f92672>:</span> <span style=color:#ae81ff>no-cache</span>
+</span></span><span style=display:flex><span>strict-transport-security<span style=color:#f92672>:</span> <span style=color:#ae81ff>max-age=31536000</span>
+</span></span><span style=display:flex><span>transfer-encoding<span style=color:#f92672>:</span> <span style=color:#ae81ff>chunked</span>
+</span></span><span style=display:flex><span>vary<span style=color:#f92672>:</span> <span style=color:#ae81ff>Accept-Encoding,Origin</span>
+</span></span><span style=display:flex><span>x-ms-aad-applied-role-assignment<span style=color:#f92672>:</span> <span style=color:#ae81ff>,a654236b-8ba1-0dd2-7a87-43dd83a89fa5</span>
+</span></span><span style=display:flex><span>x-ms-activity-id<span style=color:#f92672>:</span> <span style=color:#ae81ff>b1d57e0e-7467-461f-971b-c6e02cf8097b</span>
+</span></span><span style=display:flex><span>x-ms-alt-content-path<span style=color:#f92672>:</span> <span style=color:#ae81ff>dbs/mydatabase/colls/mycontainer</span>
+</span></span><span style=display:flex><span>x-ms-content-path<span style=color:#f92672>:</span> <span style=color:#ae81ff>YVEzAK5GDSw=</span>
+</span></span><span style=display:flex><span>x-ms-continuation<span style=color:#f92672>:</span> <span style=color:#ae81ff>{&#34;token&#34;:&#34;-RID:~YVEzAK5GDSwBAAAAAAAAAA==#RT:1#TRC:1#ISV:2#IEO:65567#QCF:8&#34;,&#34;range&#34;:{&#34;min&#34;:&#34;&#34;,&#34;max&#34;:&#34;FF&#34;}}</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-is-partition-key-delete-pending<span style=color:#f92672>:</span> <span style=color:#ae81ff>false</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-llsn<span style=color:#f92672>:</span> <span style=color:#ae81ff>34</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-physical-partition-id<span style=color:#f92672>:</span> <span style=color:#ae81ff>0</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-query-execution-info<span style=color:#f92672>:</span> <span style=color:#ae81ff>{&#34;reverseRidEnabled&#34;:false,&#34;reverseIndexScan&#34;:false}</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-quorum-acked-llsn<span style=color:#f92672>:</span> <span style=color:#ae81ff>34</span>
+</span></span><span style=display:flex><span>x-ms-current-replica-set-size<span style=color:#f92672>:</span> <span style=color:#ae81ff>4</span>
+</span></span><span style=display:flex><span>x-ms-current-write-quorum<span style=color:#f92672>:</span> <span style=color:#ae81ff>3</span>
+</span></span><span style=display:flex><span>x-ms-documentdb-partitionkeyrangeid<span style=color:#f92672>:</span> <span style=color:#ae81ff>0</span>
+</span></span><span style=display:flex><span>x-ms-gatewayversion<span style=color:#f92672>:</span> <span style=color:#ae81ff>version=2.14.0</span>
+</span></span><span style=display:flex><span>x-ms-global-committed-lsn<span style=color:#f92672>:</span> <span style=color:#ae81ff>34</span>
+</span></span><span style=display:flex><span>x-ms-item-count<span style=color:#f92672>:</span> <span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span>x-ms-last-state-change-utc<span style=color:#f92672>:</span> <span style=color:#ae81ff>Mon,06 Nov 2023 20:05:32.452 GMT</span>
+</span></span><span style=display:flex><span>x-ms-number-of-read-regions<span style=color:#f92672>:</span> <span style=color:#ae81ff>0</span>
+</span></span><span style=display:flex><span>x-ms-quorum-acked-lsn<span style=color:#f92672>:</span> <span style=color:#ae81ff>34</span>
+</span></span><span style=display:flex><span>x-ms-request-charge<span style=color:#f92672>:</span> <span style=color:#ae81ff>2.26</span>
+</span></span><span style=display:flex><span>x-ms-request-duration-ms<span style=color:#f92672>:</span> <span style=color:#ae81ff>20.615</span>
+</span></span><span style=display:flex><span>x-ms-resource-quota<span style=color:#f92672>:</span> <span style=color:#ae81ff>documentSize=51200;documentsSize=52428800;documentsCount=-1;collectionSize=52428800;</span>
+</span></span><span style=display:flex><span>x-ms-resource-usage<span style=color:#f92672>:</span> <span style=color:#ae81ff>documentSize=0;documentsSize=0;documentsCount=2;collectionSize=0;</span>
+</span></span><span style=display:flex><span>x-ms-schemaversion<span style=color:#f92672>:</span> <span style=color:#ae81ff>1.16</span>
+</span></span><span style=display:flex><span>x-ms-serviceversion<span style=color:#f92672>:</span> <span style=color:#ae81ff>version=2.14.0.0</span>
+</span></span><span style=display:flex><span>x-ms-session-token<span style=color:#f92672>:</span> <span style=color:#ae81ff>0:-1#34</span>
+</span></span><span style=display:flex><span>x-ms-transport-request-id<span style=color:#f92672>:</span> <span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span>x-ms-xp-role<span style=color:#f92672>:</span> <span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span>   <span style=color:#ae81ff> </span>
+</span></span><span style=display:flex><span><span style=color:#960050;background-color:#1e0010>{</span>
+</span></span><span style=display:flex><span>    <span style=color:#e6db74>&#34;_rid&#34;</span><span style=color:#960050;background-color:#1e0010>:</span> <span style=color:#e6db74>&#34;YVEzAK5GDSw=&#34;</span><span style=color:#960050;background-color:#1e0010>,</span>
+</span></span><span style=display:flex><span>    <span style=color:#e6db74>&#34;Documents&#34;</span><span style=color:#960050;background-color:#1e0010>:</span> [{
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;id&#34;</span>: <span style=color:#e6db74>&#34;123&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;name&#34;</span>: <span style=color:#e6db74>&#34;Alex&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;_rid&#34;</span>: <span style=color:#e6db74>&#34;YVEzAK5GDSwBAAAAAAAAAA==&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;_self&#34;</span>: <span style=color:#e6db74>&#34;dbs\/YVEzAA==\/colls\/YVEzAK5GDSw=\/docs\/YVEzAK5GDSwBAAAAAAAAAA==\/&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;_etag&#34;</span>: <span style=color:#e6db74>&#34;\&#34;7a002c05-0000-0d00-0000-65494dc10000\&#34;&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;_attachments&#34;</span>: <span style=color:#e6db74>&#34;attachments\/&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;_ts&#34;</span>: <span style=color:#ae81ff>1699302849</span>
+</span></span><span style=display:flex><span>    }]<span style=color:#960050;background-color:#1e0010>,</span>
+</span></span><span style=display:flex><span>    <span style=color:#e6db74>&#34;_count&#34;</span><span style=color:#960050;background-color:#1e0010>:</span> <span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span><span style=color:#960050;background-color:#1e0010>}</span>
+</span></span></code></pre></div><p>The important part of the response is the <code>x-ms-continuation: {"token":"-RID:~YVEzAK5GDSwBAAAAAAAAAA==#RT:1#TRC:1#ISV:2#IEO:65567#QCF:8","range":{"min":"","max":"FF"}}</code> header.
+The consumer should pass it back to the API Management in the header &ldquo;from&rdquo; to get the next page of the results.</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-http data-lang=http><span style=display:flex><span><span style=color:#a6e22e>GET</span> https://apim-samples-234f1f22a3.azure-api.net/document/take/1 <span style=color:#66d9ef>HTTP</span><span style=color:#f92672>/</span><span style=color:#ae81ff>1.1</span>
+</span></span><span style=display:flex><span>Host<span style=color:#f92672>:</span> <span style=color:#ae81ff>apim-samples-234f1f22a3.azure-api.net</span>
+</span></span><span style=display:flex><span>from<span style=color:#f92672>:</span> <span style=color:#ae81ff>{&#34;token&#34;:&#34;-RID:~YVEzAK5GDSwBAAAAAAAAAA==#RT:1#TRC:1#ISV:2#IEO:65567#QCF:8&#34;,&#34;range&#34;:{&#34;min&#34;:&#34;&#34;,&#34;max&#34;:&#34;FF&#34;}}</span>
+</span></span></code></pre></div><p>and the response is the second document:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-http data-lang=http><span style=display:flex><span><span style=color:#66d9ef>HTTP</span><span style=color:#f92672>/</span><span style=color:#ae81ff>1.1</span> <span style=color:#ae81ff>200</span> <span style=color:#a6e22e>Ok</span>
+</span></span><span style=display:flex><span>cache-control<span style=color:#f92672>:</span> <span style=color:#ae81ff>no-store, no-cache</span>
+</span></span><span style=display:flex><span>content-encoding<span style=color:#f92672>:</span> <span style=color:#ae81ff>gzip</span>
+</span></span><span style=display:flex><span>content-type<span style=color:#f92672>:</span> <span style=color:#ae81ff>application/json</span>
+</span></span><span style=display:flex><span>date<span style=color:#f92672>:</span> <span style=color:#ae81ff>Wed, 08 Nov 2023 21:55:17 GMT</span>
+</span></span><span style=display:flex><span>lsn<span style=color:#f92672>:</span> <span style=color:#ae81ff>34</span>
+</span></span><span style=display:flex><span>pragma<span style=color:#f92672>:</span> <span style=color:#ae81ff>no-cache</span>
+</span></span><span style=display:flex><span>strict-transport-security<span style=color:#f92672>:</span> <span style=color:#ae81ff>max-age=31536000</span>
+</span></span><span style=display:flex><span>transfer-encoding<span style=color:#f92672>:</span> <span style=color:#ae81ff>chunked</span>
+</span></span><span style=display:flex><span>vary<span style=color:#f92672>:</span> <span style=color:#ae81ff>Accept-Encoding,Origin</span>
+</span></span><span style=display:flex><span>x-ms-aad-applied-role-assignment<span style=color:#f92672>:</span> <span style=color:#ae81ff>,a654236b-8ba1-0dd2-7a87-43dd83a89fa5</span>
+</span></span><span style=display:flex><span>x-ms-activity-id<span style=color:#f92672>:</span> <span style=color:#ae81ff>df0943e0-42ce-43c9-90e5-b4642dfeab64</span>
+</span></span><span style=display:flex><span>x-ms-alt-content-path<span style=color:#f92672>:</span> <span style=color:#ae81ff>dbs/mydatabase/colls/mycontainer</span>
+</span></span><span style=display:flex><span>x-ms-content-path<span style=color:#f92672>:</span> <span style=color:#ae81ff>YVEzAK5GDSw=</span>
+</span></span><span style=display:flex><span>x-ms-continuation<span style=color:#f92672>:</span> <span style=color:#ae81ff>[{&#34;token&#34;:&#34;-RID:~YVEzAK5GDSwCAAAAAAAAAA==#RT:2#TRC:2#ISV:2#IEO:65567#QCF:8&#34;,&#34;range&#34;:{&#34;min&#34;:&#34;&#34;,&#34;max&#34;:&#34;FF&#34;}}]</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-is-partition-key-delete-pending<span style=color:#f92672>:</span> <span style=color:#ae81ff>false</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-llsn<span style=color:#f92672>:</span> <span style=color:#ae81ff>34</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-physical-partition-id<span style=color:#f92672>:</span> <span style=color:#ae81ff>0</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-query-execution-info<span style=color:#f92672>:</span> <span style=color:#ae81ff>{&#34;reverseRidEnabled&#34;:false,&#34;reverseIndexScan&#34;:false}</span>
+</span></span><span style=display:flex><span>x-ms-documentdb-partitionkeyrangeid<span style=color:#f92672>:</span> <span style=color:#ae81ff>0</span>
+</span></span><span style=display:flex><span>x-ms-gatewayversion<span style=color:#f92672>:</span> <span style=color:#ae81ff>version=2.14.0</span>
+</span></span><span style=display:flex><span>x-ms-global-committed-lsn<span style=color:#f92672>:</span> <span style=color:#ae81ff>33</span>
+</span></span><span style=display:flex><span>x-ms-item-count<span style=color:#f92672>:</span> <span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span>x-ms-last-state-change-utc<span style=color:#f92672>:</span> <span style=color:#ae81ff>Mon,06 Nov 2023 20:05:55.349 GMT</span>
+</span></span><span style=display:flex><span>x-ms-number-of-read-regions<span style=color:#f92672>:</span> <span style=color:#ae81ff>0</span>
+</span></span><span style=display:flex><span>x-ms-request-charge<span style=color:#f92672>:</span> <span style=color:#ae81ff>2.26</span>
+</span></span><span style=display:flex><span>x-ms-request-duration-ms<span style=color:#f92672>:</span> <span style=color:#ae81ff>21.668</span>
+</span></span><span style=display:flex><span>x-ms-resource-quota<span style=color:#f92672>:</span> <span style=color:#ae81ff>documentSize=51200;documentsSize=52428800;documentsCount=-1;collectionSize=52428800;</span>
+</span></span><span style=display:flex><span>x-ms-resource-usage<span style=color:#f92672>:</span> <span style=color:#ae81ff>documentSize=0;documentsSize=0;documentsCount=2;collectionSize=0;</span>
+</span></span><span style=display:flex><span>x-ms-schemaversion<span style=color:#f92672>:</span> <span style=color:#ae81ff>1.16</span>
+</span></span><span style=display:flex><span>x-ms-serviceversion<span style=color:#f92672>:</span> <span style=color:#ae81ff>version=2.14.0.0</span>
+</span></span><span style=display:flex><span>x-ms-session-token<span style=color:#f92672>:</span> <span style=color:#ae81ff>0:-1#34</span>
+</span></span><span style=display:flex><span>x-ms-transport-request-id<span style=color:#f92672>:</span> <span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span>x-ms-xp-role<span style=color:#f92672>:</span> <span style=color:#ae81ff>2</span>
+</span></span><span style=display:flex><span>   <span style=color:#ae81ff> </span>
+</span></span><span style=display:flex><span><span style=color:#960050;background-color:#1e0010>{</span>
+</span></span><span style=display:flex><span>    <span style=color:#e6db74>&#34;_rid&#34;</span><span style=color:#960050;background-color:#1e0010>:</span> <span style=color:#e6db74>&#34;YVEzAK5GDSw=&#34;</span><span style=color:#960050;background-color:#1e0010>,</span>
+</span></span><span style=display:flex><span>    <span style=color:#e6db74>&#34;Documents&#34;</span><span style=color:#960050;background-color:#1e0010>:</span> [{
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;id&#34;</span>: <span style=color:#e6db74>&#34;122&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;name&#34;</span>: <span style=color:#e6db74>&#34;Elena&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;_rid&#34;</span>: <span style=color:#e6db74>&#34;YVEzAK5GDSwCAAAAAAAAAA==&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;_self&#34;</span>: <span style=color:#e6db74>&#34;dbs\/YVEzAA==\/colls\/YVEzAK5GDSw=\/docs\/YVEzAK5GDSwCAAAAAAAAAA==\/&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;_etag&#34;</span>: <span style=color:#e6db74>&#34;\&#34;7a00430a-0000-0d00-0000-65494ec70000\&#34;&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;_attachments&#34;</span>: <span style=color:#e6db74>&#34;attachments\/&#34;</span>,
+</span></span><span style=display:flex><span>        <span style=color:#f92672>&#34;_ts&#34;</span>: <span style=color:#ae81ff>1699303111</span>
+</span></span><span style=display:flex><span>    }]<span style=color:#960050;background-color:#1e0010>,</span>
+</span></span><span style=display:flex><span>    <span style=color:#e6db74>&#34;_count&#34;</span><span style=color:#960050;background-color:#1e0010>:</span> <span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span><span style=color:#960050;background-color:#1e0010>}</span>
+</span></span></code></pre></div><p>As you can see the x-ms-continuation header is here again but there is no nore documents to be returned for the query.
+Yes I see that this time it is an array with an object in it. Don&rsquo;t ask me why. I don&rsquo;t know. Just pass it back to the API Management in the header &ldquo;from&rdquo; and you will get an empty response.</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-http data-lang=http><span style=display:flex><span><span style=color:#960050;background-color:#1e0010>So, when the consumer will pass it back to the API Management in the header &#34;from&#34; it will get an empty response.
+</span></span></span><span style=display:flex><span><span style=color:#960050;background-color:#1e0010>
+</span></span></span><span style=display:flex><span><span style=color:#960050;background-color:#1e0010>``` http
+</span></span></span><span style=display:flex><span><span style=color:#960050;background-color:#1e0010></span><span style=color:#a6e22e>GET</span> https://apim-samples-234f1f22a3.azure-api.net/document/take/1 <span style=color:#66d9ef>HTTP</span><span style=color:#f92672>/</span><span style=color:#ae81ff>1.1</span>
+</span></span><span style=display:flex><span>Host<span style=color:#f92672>:</span> <span style=color:#ae81ff>apim-samples-234f1f22a3.azure-api.net</span>
+</span></span><span style=display:flex><span>from<span style=color:#f92672>:</span> <span style=color:#ae81ff>[{&#34;token&#34;:&#34;-RID:~YVEzAK5GDSwCAAAAAAAAAA==#RT:2#TRC:2#ISV:2#IEO:65567#QCF:8&#34;,&#34;range&#34;:{&#34;min&#34;:&#34;&#34;,&#34;max&#34;:&#34;FF&#34;}}]</span>
+</span></span></code></pre></div><p>the response is empty:</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-http data-lang=http><span style=display:flex><span><span style=color:#66d9ef>HTTP</span><span style=color:#f92672>/</span><span style=color:#ae81ff>1.1</span> <span style=color:#ae81ff>200</span> <span style=color:#a6e22e>Ok</span>
+</span></span><span style=display:flex><span>cache-control<span style=color:#f92672>:</span> <span style=color:#ae81ff>no-store, no-cache</span>
+</span></span><span style=display:flex><span>content-encoding<span style=color:#f92672>:</span> <span style=color:#ae81ff>gzip</span>
+</span></span><span style=display:flex><span>content-type<span style=color:#f92672>:</span> <span style=color:#ae81ff>application/json</span>
+</span></span><span style=display:flex><span>date<span style=color:#f92672>:</span> <span style=color:#ae81ff>Wed, 08 Nov 2023 21:59:16 GMT</span>
+</span></span><span style=display:flex><span>lsn<span style=color:#f92672>:</span> <span style=color:#ae81ff>34</span>
+</span></span><span style=display:flex><span>pragma<span style=color:#f92672>:</span> <span style=color:#ae81ff>no-cache</span>
+</span></span><span style=display:flex><span>strict-transport-security<span style=color:#f92672>:</span> <span style=color:#ae81ff>max-age=31536000</span>
+</span></span><span style=display:flex><span>transfer-encoding<span style=color:#f92672>:</span> <span style=color:#ae81ff>chunked</span>
+</span></span><span style=display:flex><span>vary<span style=color:#f92672>:</span> <span style=color:#ae81ff>Accept-Encoding,Origin</span>
+</span></span><span style=display:flex><span>x-ms-aad-applied-role-assignment<span style=color:#f92672>:</span> <span style=color:#ae81ff>,a654236b-8ba1-0dd2-7a87-43dd83a89fa5</span>
+</span></span><span style=display:flex><span>x-ms-activity-id<span style=color:#f92672>:</span> <span style=color:#ae81ff>4a929ad5-08fc-4200-a5b5-427288d56b22</span>
+</span></span><span style=display:flex><span>x-ms-alt-content-path<span style=color:#f92672>:</span> <span style=color:#ae81ff>dbs/mydatabase/colls/mycontainer</span>
+</span></span><span style=display:flex><span>x-ms-content-path<span style=color:#f92672>:</span> <span style=color:#ae81ff>YVEzAK5GDSw=</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-is-partition-key-delete-pending<span style=color:#f92672>:</span> <span style=color:#ae81ff>false</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-llsn<span style=color:#f92672>:</span> <span style=color:#ae81ff>34</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-physical-partition-id<span style=color:#f92672>:</span> <span style=color:#ae81ff>0</span>
+</span></span><span style=display:flex><span>x-ms-cosmos-query-execution-info<span style=color:#f92672>:</span> <span style=color:#ae81ff>{&#34;reverseRidEnabled&#34;:false,&#34;reverseIndexScan&#34;:false}</span>
+</span></span><span style=display:flex><span>x-ms-documentdb-partitionkeyrangeid<span style=color:#f92672>:</span> <span style=color:#ae81ff>0</span>
+</span></span><span style=display:flex><span>x-ms-gatewayversion<span style=color:#f92672>:</span> <span style=color:#ae81ff>version=2.14.0</span>
+</span></span><span style=display:flex><span>x-ms-global-committed-lsn<span style=color:#f92672>:</span> <span style=color:#ae81ff>33</span>
+</span></span><span style=display:flex><span>x-ms-item-count<span style=color:#f92672>:</span> <span style=color:#ae81ff>0</span>
+</span></span><span style=display:flex><span>x-ms-last-state-change-utc<span style=color:#f92672>:</span> <span style=color:#ae81ff>Mon,06 Nov 2023 20:05:55.349 GMT</span>
+</span></span><span style=display:flex><span>x-ms-number-of-read-regions<span style=color:#f92672>:</span> <span style=color:#ae81ff>0</span>
+</span></span><span style=display:flex><span>x-ms-request-charge<span style=color:#f92672>:</span> <span style=color:#ae81ff>2.25</span>
+</span></span><span style=display:flex><span>x-ms-request-duration-ms<span style=color:#f92672>:</span> <span style=color:#ae81ff>20.272</span>
+</span></span><span style=display:flex><span>x-ms-resource-quota<span style=color:#f92672>:</span> <span style=color:#ae81ff>documentSize=51200;documentsSize=52428800;documentsCount=-1;collectionSize=52428800;</span>
+</span></span><span style=display:flex><span>x-ms-resource-usage<span style=color:#f92672>:</span> <span style=color:#ae81ff>documentSize=0;documentsSize=0;documentsCount=2;collectionSize=0;</span>
+</span></span><span style=display:flex><span>x-ms-schemaversion<span style=color:#f92672>:</span> <span style=color:#ae81ff>1.16</span>
+</span></span><span style=display:flex><span>x-ms-serviceversion<span style=color:#f92672>:</span> <span style=color:#ae81ff>version=2.14.0.0</span>
+</span></span><span style=display:flex><span>x-ms-session-token<span style=color:#f92672>:</span> <span style=color:#ae81ff>0:-1#34</span>
+</span></span><span style=display:flex><span>x-ms-transport-request-id<span style=color:#f92672>:</span> <span style=color:#ae81ff>1</span>
+</span></span><span style=display:flex><span>x-ms-xp-role<span style=color:#f92672>:</span> <span style=color:#ae81ff>2</span>
+</span></span><span style=display:flex><span>   <span style=color:#ae81ff> </span>
+</span></span><span style=display:flex><span><span style=color:#960050;background-color:#1e0010>{</span>
+</span></span><span style=display:flex><span>    <span style=color:#e6db74>&#34;_rid&#34;</span><span style=color:#960050;background-color:#1e0010>:</span> <span style=color:#e6db74>&#34;YVEzAK5GDSw=&#34;</span><span style=color:#960050;background-color:#1e0010>,</span>
+</span></span><span style=display:flex><span>    <span style=color:#e6db74>&#34;Documents&#34;</span><span style=color:#960050;background-color:#1e0010>:</span> []<span style=color:#960050;background-color:#1e0010>,</span>
+</span></span><span style=display:flex><span>    <span style=color:#e6db74>&#34;_count&#34;</span><span style=color:#960050;background-color:#1e0010>:</span> <span style=color:#ae81ff>0</span>
+</span></span><span style=display:flex><span><span style=color:#960050;background-color:#1e0010>}</span>
+</span></span></code></pre></div><p>Now the consumer can stop calling the API.</p><h2 id=6-conclusion>6. Conclusion</h2><p>In this post I have showed you how to connect Azure API Management to Azure Cosmosdb. This solution can be wery useful if you need to expose your CosmosDB data to the external consumers. Creating custom application that sits Azure API Management and CosmosDB will take much more time and effort.</p><p>Let me know if you have any questions or comments.</p></div><h2>Comments</h2><div id=disqus_thread></div><script type=application/javascript>window.disqus_config=function(){},function(){if(["localhost","127.0.0.1"].indexOf(window.location.hostname)!=-1){document.getElementById("disqus_thread").innerHTML="Disqus comments not available by default when the website is previewed locally.";return}var t=document,e=t.createElement("script");e.async=!0,e.src="//byalexblog.disqus.com/embed.js",e.setAttribute("data-timestamp",+new Date),(t.head||t.body).appendChild(e)}()</script><noscript>Please enable JavaScript to view the <a href=https://disqus.com/?ref_noscript>comments powered by Disqus.</a></noscript><a href=https://disqus.com class=dsq-brlink>comments powered by <span class=logo-disqus>Disqus</span></a></main><script type=application/javascript>var doNotTrack=!1;doNotTrack||(function(e,t,n,s,o,i,a){e.GoogleAnalyticsObject=o,e[o]=e[o]||function(){(e[o].q=e[o].q||[]).push(arguments)},e[o].l=1*new Date,i=t.createElement(n),a=t.getElementsByTagName(n)[0],i.async=1,i.src=s,a.parentNode.insertBefore(i,a)}(window,document,"script","https://www.google-analytics.com/analytics.js","ga"),ga("create","UA-44968940-4","auto"),ga("send","pageview"))</script></body></html>
