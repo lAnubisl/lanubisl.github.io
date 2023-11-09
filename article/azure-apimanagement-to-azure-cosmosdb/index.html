@@ -137,7 +137,7 @@ An important part is an Inbound policy that is used to connect to Azure CosmosDB
     &lt;base /&gt;
     &lt;choose&gt;
         &lt;when condition=&#34;@{
-            var takeStr = context.Request.MatchedParameters[&#39;take&#39;];
+            var takeStr = context.Request.MatchedParameters[&#34;take&#34;];
             var takeInt = 0;
             if (!int.TryParse(takeStr, out takeInt)) {
                 return true;
@@ -200,7 +200,7 @@ An important part is an Inbound policy that is used to connect to Azure CosmosDB
 &lt;/inbound&gt;
 </code></pre><p>I will comment some parts of this policy that are different from the previous one.</p><pre tabindex=0><code>&lt;choose&gt;
     &lt;when condition=&#34;@{
-        var takeStr = context.Request.MatchedParameters[&#39;take&#39;];
+        var takeStr = context.Request.MatchedParameters[&#34;take&#34;];
         var takeInt = 0;
         if (!int.TryParse(takeStr, out takeInt)) {
             return true;
