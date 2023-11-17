@@ -50,7 +50,7 @@ I will use Zip deploy option for this example.</p><p>All you need is to create d
 </span></span><span style=display:flex><span>zip -r ../publish.zip .
 </span></span><span style=display:flex><span>cd ..
 </span></span></code></pre></div><p>Double check that you generate the zip file correctly. If you don&rsquo;t then you can face an issue when Azure says &lsquo;Deployment successful&rsquo; but the function app is not working.
-The archive should not contain the folder with the function app it shoukd contain the files from the folder.</p><p>Here is the example of the incorrect archive structure.</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-bash data-lang=bash><span style=display:flex><span>unzip -l publish.zip
+The archive should not contain the folder with the function app it should contain the files from the folder.</p><p>Here is the example of the incorrect archive structure.</p><div class=highlight><pre tabindex=0 style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-bash data-lang=bash><span style=display:flex><span>unzip -l publish.zip
 </span></span><span style=display:flex><span>Archive:  publish.zip
 </span></span><span style=display:flex><span>  Length      Date    Time    Name
 </span></span><span style=display:flex><span>---------  ---------- -----   ----
